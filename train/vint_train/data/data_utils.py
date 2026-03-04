@@ -35,6 +35,42 @@ def yaw_rotmat(yaw: float) -> np.ndarray:
     )
 
 
+def to_local_coords_tensor(
+    positions: torch.Tensor, curr_pos: torch.Tensor, curr_yaw: float | torch.Tensor
+) -> torch.Tensor:
+    """
+    Torch equivalent of ``to_local_coords``.
+    Accepts positions [..., 2] or [..., 3] and returns ego-frame coords.
+    """
+    # ensure tensors
+    positions = positions.float()
+    curr_pos = curr_pos.float()
+    if isinstance(curr_yaw, torch.Tensor):
+        curr_yaw = curr_yaw.float()
+
+    cos_yaw = torch.cos(curr_yaw)
+    sin_yaw = torch.sin(curr_yaw)
+    
+    if positions.shape[-1] == 2:
+        rot = torch.stack(
+            [torch.stack([cos_yaw, -sin_yaw]), torch.stack([sin_yaw, cos_yaw])],
+            dim=0,
+        )
+    elif positions.shape[-1] == 3:
+        rot = torch.stack(
+            [
+                torch.stack([cos_yaw, -sin_yaw, torch.zeros_like(cos_yaw)]),
+                torch.stack([sin_yaw, cos_yaw, torch.zeros_like(cos_yaw)]),
+                torch.tensor([0.0, 0.0, 1.0], device=positions.device, dtype=positions.dtype),
+            ],
+            dim=0,
+        )
+    else:
+        raise ValueError("positions must have last dim 2 or 3")
+
+    # print(positions.shape, curr_pos.shape, rot.shape)
+    return torch.matmul(positions - curr_pos, rot)
+
 def to_local_coords(
     positions: np.ndarray, curr_pos: np.ndarray, curr_yaw: float
 ) -> np.ndarray:
