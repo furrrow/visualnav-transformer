@@ -1,10 +1,15 @@
+import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from typing import List, Dict, Optional, Tuple
-from vint_train.models.gnm.modified_mobilenetv2 import MobileNetEncoder
-from vint_train.models.base_model import BaseModel
+sys.path.append("..") # Adds higher directory to python modules path.
+
+# from vint_train.models.gnm.modified_mobilenetv2 import MobileNetEncoder
+from train.vint_train.models.gnm.modified_mobilenetv2 import MobileNetEncoder
+# from train.vint_train.models.base_model import BaseModel
+from train.vint_train.models.base_model import BaseModel
 
 
 class GNM(BaseModel):
