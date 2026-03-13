@@ -36,15 +36,15 @@ MODEL_CONFIG_PATH = "./deployment/config/models.yaml"
 model_paths = {
         "vint" : {
             "config_path": "./train/config/vint.yaml",
-            "ckpt_path": "./deployment/model_weights/vint.pth",
+            "ckpt_path": "./weights/vint.pth",
         },
         "gnm": {
             "config_path": "./train/config/gnm.yaml",
-            "ckpt_path": "./deployment/model_weights/gnm.pth",
+            "ckpt_path": "./weights/gnm.pth",
         },
         "nomad": {
             "config_path": "./train/config/nomad.yaml",
-            "ckpt_path": "./deployment/model_weights/nomad.pth",
+            "ckpt_path": "./weights/nomad.pth",
         },
     }
 
