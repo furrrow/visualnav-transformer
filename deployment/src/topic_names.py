@@ -24,6 +24,7 @@ TURNING_TOPIC = "/turning"
 SUBGOAL_GEN_RATE_TOPIC = "/subgoal_gen_rate"
 MARKER_TOPIC = "/visualization_marker_array"
 VIZ_NAV_IMAGE_TOPIC = "/nav_image"
+OVERLAY_TOPIC =  "/ghost/path_overlay"
 
 # visualization topics
 CHOSEN_SUBGOAL_TOPIC = "/chosen_subgoal"

@@ -1,4 +1,4 @@
-# linear and angular speed limits for the robot
+# THIS IS NOT USED ANYMORE!
 max_v: 0.2 #0.4 # m/s
 max_w: 0.4 #0.8 # rad/s
 # observation rate fo the robot

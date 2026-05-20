@@ -6,11 +6,11 @@ import numpy as np
 import torch
 import matplotlib
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 from matplotlib.gridspec import GridSpec
 matplotlib.use("TkAgg")
 import yaml
 
-import pickle
 from PIL import Image as PILImage
 import argparse
 import torchdiffeq
@@ -22,6 +22,8 @@ from deployment.src.offline_utils import plot_trajs_and_points
 from deployment.src.offline_utils import (to_numpy, transform_images, load_model,
                            load_calibration, overlay_path, get_action)
 from deployment.src.offline_utils import RGB_color_dict as color_dict
+from visualnav_inference_point_based import RewardInferenceRunner
+from frechetdist import frdist
 """
 offline_inference.py
 custom inference script to test out visualnav,
@@ -30,8 +32,70 @@ custom inference script to test out visualnav,
 # CONSTANTS
 TOPOMAP_IMAGES_DIR = "/home/jim/Projects/prune/deployment/topomaps/images"
 CAMERA_MATRIX_DIR = "/home/jim/Projects/prune/deployment/camera_matrix.json"
+# TOPOMAP_IMAGES_DIR = "/workspace/prune/deployment/topomaps/images"
+# CAMERA_MATRIX_DIR = "/workspace/prune/deployment/camera_matrix.json"
 ROBOT_CONFIG_PATH ="./deployment/config/robot.yaml"
 MODEL_CONFIG_PATH = "./deployment/config/models.yaml"
+
+
+def make_video_writer(video_path: str, fps: float):
+    suffix = Path(video_path).suffix.lower()
+    if suffix == ".gif":
+        return animation.PillowWriter(fps=fps), video_path
+
+    if animation.writers.is_available("ffmpeg"):
+        return animation.FFMpegWriter(fps=fps), video_path
+
+    fallback_path = str(Path(video_path).with_suffix(".gif"))
+    print(f"ffmpeg is not available; saving GIF instead: {fallback_path}")
+    return animation.PillowWriter(fps=fps), fallback_path
+
+def resample_path_2d(path: np.ndarray, k: int) -> np.ndarray:
+    """
+    Evenly resample a sequence of 2D points to length k using linear interpolation.
+    Expects ``path`` shape (n, 2); returns float32 array shape (k, 2).
+    """
+    if path.size == 0:
+        return np.zeros((k, 2), dtype=np.float32)
+    if len(path) == 1:
+        return np.repeat(path, k, axis=0)
+    deltas = path[1:] - path[:-1]
+    seg_len = np.linalg.norm(deltas, axis=1)
+    cum = np.concatenate([np.array([0.0], dtype=np.float32), np.cumsum(seg_len, dtype=np.float32)])
+    total = cum[-1]
+    if total == 0:
+        return np.repeat(path[:1], k, axis=0)
+
+    target = np.linspace(0.0, float(total), num=k, dtype=np.float32)
+    out = np.empty((k, path.shape[1]), dtype=np.float32)
+    for i, t in enumerate(target):
+        j = np.searchsorted(cum, t, side="right") - 1
+        j = int(np.clip(j, 0, len(seg_len) - 1))
+        t0, t1 = cum[j], cum[j + 1]
+        alpha = 0.0 if t1 == t0 else float((t - t0) / (t1 - t0))
+        out[i] = path[j] * (1 - alpha) + path[j + 1] * alpha
+    return out
+
+def prune_distance(points: np.ndarray, cutoff: float, n_paths=8, k: int=8):
+    """
+
+    :param points: trajectories of xy points, (num_trajectories, traj_length, 2)
+    :param cutoff: a distance measure
+    :return: updated trajectory points
+    """
+    paths = np.array(points, dtype=np.float32) # (8, 8, 2)
+    n_pts, pt_len, _ = paths.shape
+    first_points = np.expand_dims(paths[:, 0, :], 1).repeat(pt_len, axis=1)
+    deltas = paths - first_points
+    seg_len = np.linalg.norm(deltas, axis=-1)
+    path_check = seg_len > cutoff
+    paths = paths[:n_paths]
+    for i, i_path in enumerate(paths):
+        if not True in path_check[i]:
+            continue
+        sub_path = i_path[:np.argmax(path_check[i])]
+        paths[i] = resample_path_2d(sub_path, k)
+    return paths
 
 model_paths = {
         "vint" : {
@@ -61,26 +125,60 @@ def main(config: dict) -> None:
     device = torch.device(
         f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu"
     )
+    exp_dir = args.exp_dir
+    os.makedirs(exp_dir, exist_ok=True)
 
+    if args.steer:
+        # Reward model
+        # rm_ckpt_path = "./weights/epoch_029.pt"
+        # rm_ckpt_path = "../../weights/model_150_epoch_34.pth"
+        rm_ckpt_path = "../../weights/model_151_epoch_22.pth"
+        # rm_config_path = "/home/jim/Projects/prune/config/config_point_based.yaml"
+        rm_config_path = "/home/jim/Projects/prune/config/setting.yaml"
+        reward_runner = RewardInferenceRunner(checkpoint_path=rm_ckpt_path, config_path=rm_config_path, verbose=True)
+
+    distance_cutoff = 5 # won't consider paths beyond this distance when doing steering
+    ckpt_path = model_paths[args.model]["ckpt_path"]
+    if os.path.exists(ckpt_path):
+        print(f"Loading model from {ckpt_path}")
+    else:
+        raise FileNotFoundError(f"Model weights not found at {ckpt_path}")
+    cur_exp_dir = f"{exp_dir}/{args.model}_{args.dir}_{args.goal_node}_{distance_cutoff}"
+    if args.steer:
+        cur_exp_dir = f"{exp_dir}/{args.model}_{Path(rm_ckpt_path).name}_{args.dir}_{args.goal_node}_{distance_cutoff}"
+    os.makedirs(cur_exp_dir, exist_ok=True)
+
+    cur_exp_im_dir = f"{cur_exp_dir}/images"
+    os.makedirs(cur_exp_im_dir, exist_ok=True)
+
+    cur_exp_pkl_dir = f"{cur_exp_dir}/pkl"
+    os.makedirs(cur_exp_pkl_dir, exist_ok=True)
+
+    video_path = args.video_path
+    if video_path is None:
+        video_path = os.path.join(cur_exp_dir, "navigation.mp4")
+    video_parent = os.path.dirname(video_path)
+    if video_parent:
+        os.makedirs(video_parent, exist_ok=True)
+    video_writer, video_path = make_video_writer(video_path, args.video_fps)
     # load model parameters
     model_config_path = model_paths[args.model]["config_path"]
     with open(model_config_path, "r") as f:
         model_params = yaml.safe_load(f)
 
-    # load model weights
-    ckpth_path = model_paths[args.model]["ckpt_path"]
-    if os.path.exists(ckpth_path):
-        print(f"Loading model from {ckpth_path}")
+    if args.mode == "navigate":
+        mode = "navigate"
     else:
-        raise FileNotFoundError(f"Model weights not found at {ckpth_path}")
+        mode = "explore"
+
+    # load model weights
     model = load_model(
-        ckpth_path,
+        ckpt_path,
         model_params,
         device,
     )
     model = model.to(device)
     model.eval()
-
     # load topomap
     topomap_filenames = sorted(os.listdir(os.path.join(
         TOPOMAP_IMAGES_DIR, args.dir)), key=lambda x: int(x.split(".")[0]))
@@ -92,12 +190,6 @@ def main(config: dict) -> None:
         topomap.append(PILImage.open(image_path))
 
     context_size = model_params["context_size"]
-    context_queue = topomap[:context_size+1]
-    # if len(context_queue) < self.context_size + 1:
-    #     self.context_queue.append(self.obs_img)
-    # else:
-    #     self.context_queue.pop(0)
-    #     self.context_queue.append(self.obs_img)
 
     cam_matrix, dist_coeffs, T_base_from_cam = load_calibration(CAMERA_MATRIX_DIR)
     T_cam_from_base = np.linalg.inv(T_base_from_cam)
@@ -111,161 +203,199 @@ def main(config: dict) -> None:
             prediction_type='epsilon'
         )
 
-    # run_navigation_loop, once.
-    chosen_waypoint = np.zeros(4)
-    obs_images = transform_images(context_queue, model_params["image_size"], center_crop=False)
-    obs_images = torch.split(obs_images, 3, dim=1)
-    obs_images = torch.cat(obs_images, dim=1)
-    obs_images = obs_images.to(device) # [1, 15, 96, 96]
+
     # Definition of the goal mask (convention: 0 = no mask, 1 = mask)
     one_mask = torch.ones(1).long().to(device)
     no_mask = torch.zeros(1).long().to(device)
 
-    closest_node = 0
     assert -1 <= args.goal_node < len(topomap), "Invalid goal index"
     if args.goal_node == -1:
         goal_node = len(topomap) - 1
     else:
         goal_node = args.goal_node
-    start = max(closest_node - args.radius, 0)
-    end = min(closest_node + args.radius + 1, goal_node)
-    goal_image = [transform_images(g_img, model_params["image_size"], center_crop=False).to(device) for g_img in
-                  topomap[start:end + 1]]
-    goal_image = torch.concat(goal_image, dim=0)
 
-    # navigation
-    obsgoal_cond = model('vision_encoder', obs_img=obs_images.repeat(len(goal_image), 1, 1, 1),
-                              goal_img=goal_image, input_goal_mask=no_mask.repeat(len(goal_image)))
-    dists = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
-    dists = to_numpy(dists.flatten())
+    context_size = model_params["context_size"]
+    last_start_img = len(topomap) - context_size - 1
+    if args.start_img > last_start_img:
+        raise ValueError(
+            f"start_img={args.start_img} does not leave enough images for "
+            f"context_size={context_size}; last valid start is {last_start_img}"
+        )
 
-    # exploration
-    obs_cond = model('vision_encoder', obs_img=obs_images.repeat(len(goal_image), 1, 1, 1),
-                         goal_img=goal_image, input_goal_mask=one_mask.repeat(len(goal_image)))
-    min_idx = np.argmin(dists)
-    closest_node = min_idx + start
+    closest_node = args.start_img
+    plt.ion()
+    fig = plt.figure(figsize=(16, 8))
+    video_writer.setup(fig, video_path, dpi=args.video_dpi)
+    for nav_idx, start_img in enumerate(range(args.start_img, last_start_img + 1)):
+        context_queue = topomap[start_img:context_size + start_img + 1]
+        rewards = None
+        chosen_waypoint = np.zeros(4)
+        print(f"\nNavigation iteration {nav_idx}: topomap {args.dir} window {start_img}-{start_img + context_size}")
 
-    # infer action
-    with torch.no_grad():
-        start_time = time.time()
-        obs_cond = obs_cond[
-            min(min_idx + int(dists[min_idx] < args.close_threshold), len(obsgoal_cond) - 1)].unsqueeze(0)
-        obsgoal_cond = obsgoal_cond[
-            min(min_idx + int(dists[min_idx] < args.close_threshold), len(obsgoal_cond) - 1)].unsqueeze(0)
+        obs_images = transform_images(context_queue, model_params["image_size"], center_crop=False)
+        obs_images = torch.split(obs_images, 3, dim=1)
+        obs_images = torch.cat(obs_images, dim=1)
+        obs_images = obs_images.to(device)  # [1, 15, 96, 96]
 
-        if len(obs_cond.shape) == 2:
-            obs_cond = obs_cond.repeat(args.num_samples, 1)
-            obsgoal_cond = obsgoal_cond.repeat(args.num_samples, 1)
+        start = max(closest_node - args.radius, 0)
+        end = min(closest_node + args.radius + 1, goal_node)
+        goal_image = [transform_images(g_img, model_params["image_size"], center_crop=False).to(device) for g_img in
+                      topomap[start:end + 1]]
+        goal_image = torch.concat(goal_image, dim=0)
+
+        if mode == "explore":
+            obs_cond = model('vision_encoder', obs_img=obs_images.repeat(len(goal_image), 1, 1, 1),
+                             goal_img=goal_image, input_goal_mask=one_mask.repeat(len(goal_image)))
+            dists = model("dist_pred_net", obsgoal_cond=obs_cond)
+        elif mode == "navigate":
+            obs_cond = model('vision_encoder', obs_img=obs_images.repeat(len(goal_image), 1, 1, 1),
+                                      goal_img=goal_image, input_goal_mask=no_mask.repeat(len(goal_image)))
+            dists = model("dist_pred_net", obsgoal_cond=obs_cond)
+
+        dists = to_numpy(dists.flatten())
+        min_idx = np.argmin(dists)
+        closest_node = min_idx + closest_node
+
+        # infer action
+        with torch.no_grad():
+            if mode == "explore":
+                obs_cond = obs_cond[
+                    min(min_idx + int(dists[min_idx] < args.close_threshold), len(obs_cond) - 1)].unsqueeze(0)
+            elif mode == "navigate":
+                obs_cond = obs_cond[
+                    min(min_idx + int(dists[min_idx] < args.close_threshold), len(obs_cond) - 1)].unsqueeze(0)
+
+            if len(obs_cond.shape) == 2:
+                obs_cond = obs_cond.repeat(args.num_samples, 1)
+            else:
+                obs_cond = obs_cond.repeat(args.num_samples, 1, 1)
+
+            noisy_action = torch.randn(
+                (args.num_samples, model_params["len_traj_pred"], 2), device=device)
+            naction = noisy_action
+
+            # init scheduler
+            noise_scheduler.set_timesteps(num_diffusion_iters)
+            start_time = time.time()
+            for k in noise_scheduler.timesteps[:]:
+                # predict noise
+                noise_pred = model(
+                    'noise_pred_net',
+                    sample=naction,
+                    timestep=k,
+                    global_cond=obs_cond
+                )
+                # inverse diffusion step (remove noise)
+                naction = noise_scheduler.step(
+                    model_output=noise_pred,
+                    timestep=k,
+                    sample=naction
+                ).prev_sample
+            print("time elapsed:", time.time() - start_time)
+
+            # proc_time = time.time() - start_time
+            # mean_proc_time = proc_time / noisy_action.shape[0]
+            # print("Mean Processing Time UC", mean_proc_time)
+            # print("Processing Time UC", proc_time)
+
+            actions = to_numpy(get_action(naction))
+            current_action = actions[0]
+            chosen_waypoint = current_action[args.waypoint]
+
+            if args.steer:
+                pruned_actions = prune_distance(actions, distance_cutoff, 8)
+                image_tensor = torch.from_numpy(np.array(context_queue[-1])).permute(2, 0, 1).contiguous()  # (3, H, W)
+                points_tensor = torch.from_numpy(pruned_actions)  # (M, K, 2)
+                rewards = reward_runner.predict_rewards(image_tensor=image_tensor, points_tensor=points_tensor)
+                best_action = torch.argmax(rewards).item()
+                print("Predicted rewards:", rewards, "best reward action(red) :", best_action)
+                # different distrance metric to make sure selected action does not veer too far:
+                eval_dict = {}
+                for idx, action in enumerate(pruned_actions):
+                    eval_dict[idx] = {}
+                    eval_dict[idx]["reward"] = rewards[idx].item()
+                    eval_dict[idx]["frdist"] = frdist(action, pruned_actions[0])
+            proc_time = time.time() - start_time
+            mean_proc_time = proc_time / noisy_action.shape[0]
+            print(f"Processing Time {proc_time:.4f} Mean Processing Time {mean_proc_time:.4f}")
+
+        # plot distribution:
+        fig.clf()
+        gs = GridSpec(2, 3, figure=fig)
+        ax00 = fig.add_subplot(gs[0, 0])
+        ax01 = fig.add_subplot(gs[1, 0])
+        ax11 = fig.add_subplot(gs[:, 1:])
+
+        fig.suptitle(f"trajectory visualization with {args.model} | iteration {nav_idx}")
+        actions = list(actions)
+        traj_list = np.concatenate([actions], axis=0, )
+        traj_list = traj_list[:, :, ::-1] # flip y-x for visualization purposes
+        traj_list[:, :, 0] = -traj_list[:, :, 0] # flip x about 0 for visualization purposes
+        traj_colors = ["blue"] + ["green"] * (len(actions)-1)
+        traj_alphas = [0.75] + [0.1] * (len(actions)-1)
+        if rewards is not None:
+            new_traj_list = np.concatenate([pruned_actions], axis=0, )
+            new_traj_list = new_traj_list[:, :, ::-1]  # flip y-x for visualization purposes
+            new_traj_list[:, :, 0] = -new_traj_list[:, :, 0]  # flip x about 0 for visualization purposes
+            traj_list = np.concatenate((traj_list, new_traj_list), axis=0, )
+            new_colors = ["blue"] + ["green"] * (len(actions)-1)
+            traj_colors[best_action] = "red"
+            new_colors[best_action] = "red"
+            traj_colors += new_colors
+            traj_alphas += [0.5] * len(pruned_actions)
+
+        point_list = [np.array([0, 0])]
+        point_colors = ["green", "red"]
+        point_alphas = [1.0, 1.0]
+        plot_trajs_and_points(
+            ax=ax01,
+            list_trajs=traj_list,
+            list_points=point_list,
+            traj_colors=traj_colors,
+            point_colors=point_colors,
+            traj_labels=None,
+            point_labels=None,
+            quiver_freq=0,
+            traj_alphas=traj_alphas,
+            point_alphas=point_alphas,
+        )
+        obs_image = np.array(context_queue[-1])  # not sure which img is the best one to show...
+        display_goal_image = np.array(topomap[closest_node])
+        if args.steer:
+            overlay_img = overlay_path(np.array(pruned_actions), obs_image, cam_matrix, T_cam_from_base, color_dict['GREEN'],
+                                       metrics=eval_dict)
         else:
-            obs_cond = obs_cond.repeat(args.num_samples, 1, 1)
-            obsgoal_cond = obsgoal_cond.repeat(args.num_samples, 1, 1)
+            overlay_img = overlay_path(np.array(actions), obs_image, cam_matrix, T_cam_from_base, color_dict['GREEN'])
+        if overlay_img is not None:
+            ax11.imshow(overlay_img)
+        else:
+            ax11.imshow(obs_image)
 
-        # Navigation
-        noisy_action = torch.randn(
-            (args.num_samples, model_params["len_traj_pred"], 2), device=device)
-        naction = noisy_action
+        ax00.imshow(display_goal_image)
+        ax00.set_title(f"intermediate goal node {closest_node}")
+        ax01.set_title("action predictions")
+        ax11.set_title("observation, blue best path")
 
-        # init scheduler
-        noise_scheduler.set_timesteps(num_diffusion_iters)
-        start_time = time.time()
-        for k in noise_scheduler.timesteps[:]:
-            # predict noise
-            noise_pred = model(
-                'noise_pred_net',
-                sample=naction,
-                timestep=k,
-                global_cond=obs_cond
-            )
-            # inverse diffusion step (remove noise)
-            naction = noise_scheduler.step(
-                model_output=noise_pred,
-                timestep=k,
-                sample=naction
-            ).prev_sample
-        print("time elapsed:", time.time() - start_time)
+        fig.canvas.draw()
+        fig.canvas.flush_events()
+        image_path = os.path.join(cur_exp_im_dir, f"navigation_{nav_idx:04d}.png")
+        fig.savefig(image_path, dpi=args.video_dpi, bbox_inches="tight")
+        video_writer.grab_frame()
+        # plt.pause(0.5)
 
-        # proc_time = time.time() - start_time
-        # mean_proc_time = proc_time / noisy_action.shape[0]
-        # print("Mean Processing Time UC", mean_proc_time)
-        # print("Processing Time UC", proc_time)
+        print(f"CHOSEN WAYPOINT: {chosen_waypoint}")
 
-        gc_actions = to_numpy(get_action(naction))
-        message_data = np.concatenate((np.array([0]), gc_actions.flatten()))
-        # sampled_actions_msg.data = message_data.tolist()
-        # sampled_actions_pub.publish(sampled_actions_msg)
-        # print("sampled_actions_msg", message_data)
-        current_action = gc_actions[0]
-        chosen_waypoint = current_action[args.waypoint]
+        reached_goal = closest_node == goal_node
 
-    # plot distribution:
-    fig = plt.figure(figsize=(12, 8))
-    gs = GridSpec(2, 3, figure=fig)
-    fig.suptitle(f"trajectory visualization with {args.model}")
-    ax00 = fig.add_subplot(gs[0, 0])
-    ax01 = fig.add_subplot(gs[1, 0])
-    ax11 = fig.add_subplot(gs[:, 1:])
+        if reached_goal:
+            print("Reached goal; saving and exiting.")
+            break
 
-    # uc_actions = list(uc_actions)
-    gc_actions = list(gc_actions)
-    action_label = gc_actions[0]
-    traj_list = np.concatenate(
-        [
-            gc_actions,
-            action_label[None],
-        ],
-        axis=0,
-    ) # [17,8,2]
-    traj_colors = (
-            ["green"] * len(gc_actions) + ["magenta"]
-    )
-    mock_goal_pos = np.array([10, 0])
-    traj_alphas = [0.1] * (len(gc_actions)) + [1.0]
-    point_list = [np.array([0, 0]), torch.Tensor(mock_goal_pos)]
-    point_colors = ["green", "red"]
-    point_alphas = [1.0, 1.0]
-    plot_trajs_and_points(
-        ax=ax00,
-        list_trajs=traj_list,
-        list_points=point_list,
-        traj_colors=traj_colors,
-        point_colors=point_colors,
-        traj_labels=None,
-        point_labels=None,
-        quiver_freq=0,
-        traj_alphas=traj_alphas,
-        point_alphas=point_alphas,
-    )
-    obs_image = np.array(context_queue[0])
-    goal_image = np.array(topomap[-1])
-    # obs_image = np.moveaxis(obs_image, 0, -1)
-    # goal_image = np.moveaxis(goal_image, 0, -1)
-    obs_image = overlay_path(np.array(gc_actions[1:]), obs_image, cam_matrix, T_cam_from_base, color_dict['GREEN'])
-    obs_image = overlay_path(np.array(gc_actions[0]), obs_image, cam_matrix, T_cam_from_base, color_dict['BLUE'])
-    ax11.imshow(obs_image)
-    ax00.set_title("action predictions \n green goal, magenta best_path red notional goal")
-    ax11.set_title("observation, blue best path")
-
-    ax01.imshow(goal_image)
-    ax01.set_title(f"goal")
+    print(f"Finished {nav_idx + 1} navigation iterations.")
+    video_writer.finish()
+    print(f"Saved navigation video to {video_path}")
+    plt.ioff()
     plt.show()
-
-
-    # waypoint_msg = Float32MultiArray()
-    waypoint_msg = chosen_waypoint.flatten().tolist()
-    # waypoint_msg.data = chosen_waypoint.flatten().tolist()
-    # waypoint_pub.publish(waypoint_msg)
-    print("goal reached message", waypoint_msg)
-
-    print(f"CHOSEN WAYPOINT: {chosen_waypoint}")
-
-    reached_goal = closest_node == goal_node
-    # goal_reached_msg = Bool()
-    # goal_reached_msg.data = bool(reached_goal)
-    # goal_pub.publish(goal_reached_msg)
-    print("goal reached message")
-
-    if reached_goal:
-        print("Reached goal! Stopping...")
 
 
 if __name__ == "__main__":
@@ -282,50 +412,89 @@ if __name__ == "__main__":
     parser.add_argument(
         "--waypoint",
         "-w",
-        default=2,  # close waypoints exihibit straight line motion (the middle waypoint is a good default)
+        default=2,
         type=int,
-        help=f"""index of the waypoint used for navigation (between 0 and 4 or 
-            how many waypoints your model predicts) (default: 2)""",
+        help="index of the waypoint used for navigation (default: 2)",
     )
     parser.add_argument(
         "--dir",
-        "-d",
-        default="antonov",
+        "-topo_dir",
+        default="iribe_corridoor",
         type=str,
-        help="folder title in the topomap image folder",
+        help="path to topomap images",
     )
     parser.add_argument(
         "--goal-node",
         "-g",
         default=-1,
         type=int,
-        help="""goal node index in the topomap (if -1, then the goal node is 
-            the last node in the topomap) (default: -1)""",
+        help="goal node index in the topomap (if -1, then the goal node is the last node in the topomap)",
+    )
+    parser.add_argument(
+        "--start-img",
+        "-s",
+        default=0,
+        type=int,
+        help="which topomap image to use as observation",
     )
     parser.add_argument(
         "--close-threshold",
         "-t",
         default=3,
         type=int,
-        help="""temporal distance within the next node in the topomap before 
-            localizing to it (default: 3)""",
+        help="temporal distance within the next node in the topomap before localizing to it",
     )
     parser.add_argument(
         "--radius",
         "-r",
-        default=4,
+        default=10,
         type=int,
-        help="""temporal number of locobal nodes to look at in the topopmap for
-            localization (default: 2)""",
+        help="temporal number of locobal nodes to look at in the topopmap for localization",
     )
     parser.add_argument(
         "--num-samples",
         "-n",
         default=8,
         type=int,
-        help=f"Number of actions sampled from the exploration model (default: 8)",
+        help="Number of actions sampled from the exploration model",
+    )
+    parser.add_argument(
+        "--exp_dir",
+        "-d",
+        default="./nav_experiments",
+        type=str,
+        help="Path to log experiment results",
+    )
+    parser.add_argument("-robo", "--robot", type=str, help="Robot Name",
+                        default="ghost")
+    parser.add_argument(
+        "--mode",
+        default="navigate",
+        help="navigate or explore"
+    )
+    parser.add_argument(
+        "--steer",
+        action="store_true",
+        help="whether to use the reward model steering"
+    )
+    parser.add_argument(
+        "--video-path",
+        default=None,
+        type=str,
+        help="path to save the navigation video; defaults to navigation.mp4 in the experiment directory",
+    )
+    parser.add_argument(
+        "--video-fps",
+        default=1.0,
+        type=float,
+        help="frames per second for the saved navigation video",
+    )
+    parser.add_argument(
+        "--video-dpi",
+        default=120,
+        type=int,
+        help="DPI used when encoding the saved navigation video",
     )
 
     args = parser.parse_args()
     main(args)
-
