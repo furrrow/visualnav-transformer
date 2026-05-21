@@ -111,6 +111,7 @@ class NavigationNode(Node):
         ROBOT_CONFIG_PATH =f"{parent_dir}/prune/deployment/config/robot.yaml"
         MODEL_CONFIG_PATH = "deployment/config/models.yaml"
         CAMERA_MATRIX_DIR = f"{parent_dir}/prune/deployment/camera_matrix.json"
+        self.distance_cutoff = 10
         with open(ROBOT_CONFIG_PATH, "r") as f:
             robot_config = yaml.safe_load(f)
         self.rate = robot_config["frame_rate"]
@@ -305,7 +306,7 @@ class NavigationNode(Node):
                             timestep=k,
                             sample=naction
                         ).prev_sample
-                    print("time elapsed:", time.time() - start_time)
+                    print(f"time elapsed: {time.time() - start_time}:.4f")
 
                 naction = to_numpy(get_action(naction))
 
@@ -330,6 +331,7 @@ class NavigationNode(Node):
                         eval_dict[idx] = {}
                         eval_dict[idx]["reward"] = rewards[idx].item()
                         eval_dict[idx]["frdist"] = frdist(action, pruned_actions[0])
+                        # eval_dict[idx]["dtw"] = dtw_ndim.distance(action, pruned_actions[0])
                     # print("Predicted rewards:", rewards, "best reward action(red) :", best_action)
                 inference_time = time.time()
                 print(f"inference time: {inference_time - now}")

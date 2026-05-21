@@ -67,18 +67,16 @@ class PDControllerNode(Node):
         self.reverse_mode = False
         self.args = args
         # CONSTS
-        config_path = "./deployment/config/robot.yaml"
+        config_path = "/workspace/prune/deployment/config/robot.yaml"
         with open(config_path, "r") as f:
             robot_config = yaml.safe_load(f)
         self.rate = robot_config["frame_rate"]
-
+        print(robot_config)
         robot_config = robot_config[args.robot]
         self.max_v = robot_config["max_v"]
         self.max_w = robot_config["max_w"]
 
         self.dt = 1 / self.rate
-        EPS = 1e-8
-        FLIP_ANG_VEL = np.pi / 4
 
         self.waypoint_sub = self.create_subscription(Float32MultiArray, 
                                                      WAYPOINT_TOPIC, 
