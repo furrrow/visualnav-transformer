@@ -24,8 +24,6 @@ from pathlib import Path
 from deployment.src.offline_utils import load_calibration, overlay_path, get_action
 from deployment.src.offline_utils import RGB_color_dict as color_dict
 from deployment.src.utils import to_numpy, transform_images, load_model
-from topic_names import (IMAGE_TOPIC, WAYPOINT_TOPIC, SAMPLED_ACTIONS_TOPIC,
-                         REACHED_GOAL_TOPIC, OVERLAY_TOPIC)
 from visualnav_inference_point_based import RewardInferenceRunner
 from frechetdist import frdist
 
@@ -76,10 +74,6 @@ def prune_distance(points: np.ndarray, cutoff: float, n_paths=8, k: int=8):
         paths[i] = resample_path_2d(sub_path, k)
     return paths
 
-# GLOBALS
-context_queue = []
-context_size = None  
-subgoal = []
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
 
@@ -111,12 +105,12 @@ class NavigationNode(Node):
 
         # CONSTANTS
         robot_name = 'ghost'
-        TOPOMAP_IMAGES_DIR = "/home/jim/Projects/prune/deployment/topomaps/images"
-        # ROBOT_CONFIG_PATH ="/workspace/prune/deployment/config/robot.yaml"
-        ROBOT_CONFIG_PATH = "/home/jim/Projects/prune/deployment/config/robot.yaml"
+        # parent_dir = "/home/jim/Projects"
+        parent_dir = "/workspace"
+        TOPOMAP_IMAGES_DIR = f"{parent_dir}/prune/deployment/topomaps/images"
+        ROBOT_CONFIG_PATH =f"{parent_dir}/prune/deployment/config/robot.yaml"
         MODEL_CONFIG_PATH = "deployment/config/models.yaml"
-        # CAMERA_MATRIX_DIR = "/workspace/prune/deployment/camera_matrix.json"
-        CAMERA_MATRIX_DIR = "/home/jim/Projects/prune/deployment/camera_matrix.json"
+        CAMERA_MATRIX_DIR = f"{parent_dir}/prune/deployment/camera_matrix.json"
         with open(ROBOT_CONFIG_PATH, "r") as f:
             robot_config = yaml.safe_load(f)
         self.rate = robot_config["frame_rate"]
@@ -127,15 +121,22 @@ class NavigationNode(Node):
         self.dt = 1 / self.rate
 
         # reward model
-        rm_ckpt_path = "../../weights/epoch_029.pt"
-        # rm_ckpt_path = "../../weights/model_150_epoch_34.pth"
-        # rm_ckpt_path = "../../weights/model_151_epoch_22.pth"
-        rm_config_path = "./deployment/config/config_point_based.yaml"
-        # rm_config_path = "/home/jim/Projects/prune/config/setting.yaml"
+        rm_ckpt_path = f"{parent_dir}/prune/weights/epoch_029.pt"
+        # rm_ckpt_path = f"{parent_dir}/prune/weights/model_150_epoch_34.pth"
+        # rm_ckpt_path = f"{parent_dir}/prune/weights/model_151_epoch_22.pth"
+        rm_config_path = f"{parent_dir}/prune/config/config_point_based.yaml"
+        # rm_config_path = f"{parent_dir}/prune/prune/config/setting.yaml"
         if args.steer:
             self.reward_runner = RewardInferenceRunner(checkpoint_path=rm_ckpt_path, config_path=rm_config_path,
                                                        verbose=True)
             print("\n!! steering based on reward model...")
+        # ROS Topics
+        IMAGE_TOPIC = robot_config['image_topic']
+        print(f"IMAGE_TOPIC: {IMAGE_TOPIC}")
+        WAYPOINT_TOPIC = robot_config['waypoint_topic']
+        SAMPLED_ACTIONS_TOPIC = robot_config['sampled_actions_topic']
+        REACHED_GOAL_TOPIC = robot_config['reached_goal_topic']
+        OVERLAY_TOPIC = robot_config['overlay_topic']
 
          # load model parameters
         with open(MODEL_CONFIG_PATH, "r") as f:
@@ -249,9 +250,10 @@ class NavigationNode(Node):
 
     def run_navigation_loop(self, args):
         chosen_waypoint = np.zeros(4)
+
         if len(self.image_queue) > self.context_size:
             if self.model_params["model_type"] == "nomad":
-                obs_images = transform_images(context_queue, self.model_params["image_size"], center_crop=False)
+                obs_images = transform_images(self.image_queue, self.model_params["image_size"], center_crop=False)
                 obs_images = torch.split(obs_images, 3, dim=1)
                 obs_images = torch.cat(obs_images, dim=1) 
                 obs_images = obs_images.to(device)
@@ -259,7 +261,7 @@ class NavigationNode(Node):
 
                 start = max(self.closest_node - args.radius, 0)
                 end = min(self.closest_node + args.radius + 1, self.goal_node)
-                goal_image = [transform_images(g_img, self.model_params["image_size"], center_crop=False).to(device) for g_img in topomap[start:end + 1]]
+                goal_image = [transform_images(g_img, self.model_params["image_size"], center_crop=False).to(device) for g_img in self.topomap[start:end + 1]]
                 goal_image = torch.concat(goal_image, dim=0)
 
                 obsgoal_cond = self.model('vision_encoder', obs_img=obs_images.repeat(len(goal_image), 1, 1, 1), goal_img=goal_image, input_goal_mask=mask.repeat(len(goal_image)))
@@ -353,7 +355,7 @@ class NavigationNode(Node):
                 batch_obs_imgs = []
                 batch_goal_data = []
                 for i, sg_img in enumerate(self.topomap[start: end + 1]):
-                    transf_obs_img = transform_images(context_queue, self.model_params["image_size"])
+                    transf_obs_img = transform_images(self.image_queue, self.model_params["image_size"])
                     goal_data = transform_images(sg_img, self.model_params["image_size"])
                     batch_obs_imgs.append(transf_obs_img)
                     batch_goal_data.append(goal_data)
