@@ -122,11 +122,11 @@ class NavigationNode(Node):
         self.dt = 1 / self.rate
 
         # reward model
-        rm_ckpt_path = f"{parent_dir}/prune/weights/epoch_029.pt"
-        # rm_ckpt_path = f"{parent_dir}/prune/weights/model_150_epoch_34.pth"
+        # rm_ckpt_path = f"{parent_dir}/prune/weights/epoch_029.pt"
+        rm_ckpt_path = f"{parent_dir}/prune/weights/model_150_epoch_34.pth"
         # rm_ckpt_path = f"{parent_dir}/prune/weights/model_151_epoch_22.pth"
-        rm_config_path = f"{parent_dir}/prune/config/config_point_based.yaml"
-        # rm_config_path = f"{parent_dir}/prune/prune/config/setting.yaml"
+        # rm_config_path = f"{parent_dir}/prune/config/config_point_based.yaml"
+        rm_config_path = f"{parent_dir}/prune/config/setting.yaml"
         if args.steer:
             self.reward_runner = RewardInferenceRunner(checkpoint_path=rm_ckpt_path, config_path=rm_config_path,
                                                        verbose=True)
@@ -186,22 +186,21 @@ class NavigationNode(Node):
 
         # ROS 2
         self.image_sub = self.create_subscription(
-            CompressedImage, IMAGE_TOPIC, self.callback_obs,
-            qos_profile=QoSProfile(reliability=QoSReliabilityPolicy.RELIABLE,
-                                   history=QoSHistoryPolicy.KEEP_LAST,
-                                   depth=10))
+            CompressedImage, IMAGE_TOPIC, self.callback_obs, qos_profile = QoSProfile(reliability=QoSReliabilityPolicy.RELIABLE,
+                                                                            history=QoSHistoryPolicy.KEEP_LAST,
+                                                                            depth=10))
         self.waypoint_pub = self.create_publisher(
             Float32MultiArray, WAYPOINT_TOPIC, qos_profile=QoSProfile(reliability=QoSReliabilityPolicy.RELIABLE,
                                                                       history=QoSHistoryPolicy.KEEP_LAST,
                                                                       depth=10))
         self.sampled_actions_pub = self.create_publisher(
-            Float32MultiArray, SAMPLED_ACTIONS_TOPIC, qos_profile=QoSProfile(reliability=QoSReliabilityPolicy.RELIABLE,
-                                                                             history=QoSHistoryPolicy.KEEP_LAST,
-                                                                             depth=10))
+            Float32MultiArray, SAMPLED_ACTIONS_TOPIC, qos_profile = QoSProfile(reliability=QoSReliabilityPolicy.BEST_EFFORT,
+                                                                            history=QoSHistoryPolicy.KEEP_LAST,
+                                                                            depth=10))
         self.trajectory_visual_pub = self.create_publisher(
-            Image, OVERLAY_TOPIC, qos_profile=QoSProfile(reliability=QoSReliabilityPolicy.RELIABLE,
-                                                         history=QoSHistoryPolicy.KEEP_LAST,
-                                                         depth=10))
+            Image, OVERLAY_TOPIC, qos_profile = QoSProfile(reliability=QoSReliabilityPolicy.RELIABLE,
+                                                                            history=QoSHistoryPolicy.KEEP_LAST,
+                                                                            depth=10))
         self.goal_pub = self.create_publisher(Bool, REACHED_GOAL_TOPIC, 1)
         self.timer = self.create_timer(1.0 / self.rate, lambda: self.run_navigation_loop(args))
 
@@ -269,8 +268,8 @@ class NavigationNode(Node):
                 dists = self.model("dist_pred_net", obsgoal_cond=obsgoal_cond)
                 dists = to_numpy(dists.flatten())
                 min_idx = np.argmin(dists)
-                closest_node = min_idx + start
-                print("closest node:", closest_node)
+                self.closest_node = min_idx + start
+                print("closest node:", self.closest_node)
                 sg_idx = min(min_idx + int(dists[min_idx] < args.close_threshold), len(obsgoal_cond) - 1)
                 obs_cond = obsgoal_cond[sg_idx].unsqueeze(0)
 
@@ -323,6 +322,7 @@ class NavigationNode(Node):
                 current_img = np.array(self.cur_img)
                 if self.steer:
                     pruned_actions = prune_distance(actions, self.distance_cutoff, 8, 8)
+                    pruned_actions = actions
                     image_tensor = torch.from_numpy(current_img).permute(2, 0, 1).contiguous()  # (3, H, W)
                     points_tensor = torch.from_numpy(naction)  # (M, K, 2)
                     rewards = self.reward_runner.predict_rewards(image_tensor=image_tensor, points_tensor=points_tensor)
@@ -374,14 +374,14 @@ class NavigationNode(Node):
                 # chose subgoal and output waypoints
                 if distances[min_dist_idx] > args.close_threshold:
                     chosen_waypoint = waypoints[min_dist_idx][args.waypoint]
-                    closest_node = start + min_dist_idx
+                    self.closest_node = start + min_dist_idx
                 else:
                     chosen_waypoint = waypoints[min(
                         min_dist_idx + 1, len(waypoints) - 1)][args.waypoint]
-                    closest_node = min(start + min_dist_idx + 1, self.goal_node)
+                    self.closest_node = min(start + min_dist_idx + 1, self.goal_node)
         # RECOVERY MODE
-        if self.model_params["normalize"]:
-            chosen_waypoint[:2] *= (self.max_v / self.rate)
+        # if self.model_params["normalize"]:
+        #     chosen_waypoint[:2] *= (self.max_v / self.rate)
         waypoint_msg = Float32MultiArray()
         waypoint_msg.data = chosen_waypoint.flatten().tolist()
         self.waypoint_pub.publish(waypoint_msg)
