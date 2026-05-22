@@ -257,14 +257,15 @@ class NavigationNode(Node):
                 obs_images = torch.split(obs_images, 3, dim=1)
                 obs_images = torch.cat(obs_images, dim=1) 
                 obs_images = obs_images.to(device)
-                mask = torch.zeros(1).long().to(device)  
+                no_mask = torch.zeros(1).long().to(device)
 
                 start = max(self.closest_node - args.radius, 0)
                 end = min(self.closest_node + args.radius + 1, self.goal_node)
                 goal_image = [transform_images(g_img, self.model_params["image_size"], center_crop=False).to(device) for g_img in self.topomap[start:end + 1]]
                 goal_image = torch.concat(goal_image, dim=0)
 
-                obsgoal_cond = self.model('vision_encoder', obs_img=obs_images.repeat(len(goal_image), 1, 1, 1), goal_img=goal_image, input_goal_mask=mask.repeat(len(goal_image)))
+                obsgoal_cond = self.model('vision_encoder', obs_img=obs_images.repeat(len(goal_image), 1, 1, 1),
+                                          goal_img=goal_image, input_goal_mask=no_mask.repeat(len(goal_image)))
                 dists = self.model("dist_pred_net", obsgoal_cond=obsgoal_cond)
                 dists = to_numpy(dists.flatten())
                 min_idx = np.argmin(dists)
@@ -305,7 +306,7 @@ class NavigationNode(Node):
                             timestep=k,
                             sample=naction
                         ).prev_sample
-                    print(f"time elapsed: {time.time() - start_time}:.4f")
+                    print(f"noise scheduler time: {time.time() - start_time}:.4f")
 
                 naction = to_numpy(get_action(naction))
 
@@ -350,6 +351,7 @@ class NavigationNode(Node):
                     out_msg = self.br.cv2_to_imgmsg(np.array(current_img), encoding="rgb8")
                 self.trajectory_visual_pub.publish(out_msg)
                 naction = naction[0]
+                print("first action:", np.array2string(naction, precision=1, suppress_small=True))
                 chosen_waypoint = naction[args.waypoint]
             else:
                 start = max(self.closest_node - args.radius, 0)

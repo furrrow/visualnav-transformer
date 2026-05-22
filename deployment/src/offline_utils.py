@@ -463,21 +463,3 @@ def load_calibration(json_path: str):
 
     dist = None  # explicitly no distortion
     return K, dist, T_base_from_cam
-
-BGR_color_dict = { # BGR
-    "RED" : (0, 0, 255),
-    "GREEN" : (0, 255, 0),
-    "BLUE" : (255, 0, 0),
-    "CYAN" : (255, 255, 0),
-    "YELLOW" : (0, 255, 255),
-    "CUSTOM" : (125, 125, 125),
-}
-
-RGB_color_dict = { # RGB
-    "RED" : (255, 0, 0),
-    "GREEN" : (0, 255, 0),
-    "BLUE" : (0, 0, 255),
-    "CYAN" : (0, 255, 255),
-    "YELLOW" : (255, 255, 0),
-    "CUSTOM" : (125, 125, 125),
-}

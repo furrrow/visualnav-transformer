@@ -190,8 +190,6 @@ def main(config: dict) -> None:
         image_path = os.path.join(topomap_dir, topomap_filenames[i])
         topomap.append(PILImage.open(image_path))
 
-    context_size = model_params["context_size"]
-
     cam_matrix, dist_coeffs, T_base_from_cam = load_calibration(CAMERA_MATRIX_DIR)
     T_cam_from_base = np.linalg.inv(T_base_from_cam)
 
@@ -292,7 +290,7 @@ def main(config: dict) -> None:
                     timestep=k,
                     sample=naction
                 ).prev_sample
-            print("time elapsed:", time.time() - start_time)
+            print("noise scheduler time:", time.time() - start_time)
 
             # proc_time = time.time() - start_time
             # mean_proc_time = proc_time / noisy_action.shape[0]
@@ -334,6 +332,7 @@ def main(config: dict) -> None:
         traj_list[:, :, 0] = -traj_list[:, :, 0] # flip x about 0 for visualization purposes
         traj_colors = ["blue"] + ["green"] * (len(actions)-1)
         traj_alphas = [0.75] + [0.1] * (len(actions)-1)
+        print("first action:", np.array2string(actions[0], precision=1, suppress_small=True))
         if rewards is not None:
             new_traj_list = np.concatenate([pruned_actions], axis=0, )
             new_traj_list = new_traj_list[:, :, ::-1]  # flip y-x for visualization purposes
@@ -420,7 +419,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dir",
         "-topo_dir",
-        default="iribe_corridoor",
+        default="corridor_pillar",
         type=str,
         help="path to topomap images",
     )
