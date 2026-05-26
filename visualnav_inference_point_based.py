@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from typing import Optional
-from transformers import AutoImageProcessor, AutoModel
+from transformers import AutoProcessor, AutoModel
 import yaml
 from PIL import Image
 
@@ -232,60 +232,59 @@ class FusionBlock(nn.Module):
         x = x + self.ffn(self.ffn_ln(x))
         return x
 
-class RewardModelPointBased(nn.Module):
-    """
-    Reward model that lets trajectory tokens query image patch tokens via cross-attention,
-    then predicts a scalar reward.
-    """
-
-    def __init__(
-            self,
-            d_model: int = 384,
-            n_heads: int = 8,
-            dropout: float = 0.1,
-            verbose: bool = True,
-            freeze_image_encoder: bool = True,
-            keep_cls_token: bool = False,
-            fusion_blocks: int = 4,
-            num_blocks: int = 4,
-            traj_per_image: int = 4
-    ):
+class TrajectoryRewardModel(nn.Module):
+    def __init__(self,
+                 d_model: int = 384,
+                 n_heads: int = 8,
+                 dropout: float = 0.1,
+                 fusion_blocks: int = 4,
+                 num_blocks: int = 4,
+                 verbose: bool = True,
+                 image_feature_extractor_name: str = "jmtzt/ijepa_vitg16_22k",
+                 freeze_image_encoder: bool = True,
+                 image_feature_extractor: nn.Module | None = None,
+                 processor=None):
         super().__init__()
-
-        self.keep_cls_token = keep_cls_token
-        self.image_feature_extractor_name = "facebook/dinov3-vitb16-pretrain-lvd1689m"
+        # self.model_name = "facebook/dinov3-vits16-pretrain-lvd1689m"
+        self.image_feature_extractor_name = image_feature_extractor_name
         self.freeze_image_encoder = freeze_image_encoder
-        self.traj_per_image = traj_per_image
+        # self.model_name = "facebook/dinov3-vitl16-pretrain-lvd1689m"
+        # self.model_name = "facebook/dinov3-vit7b16-pretrain-lvd1689m"
 
-        # Image feature extractor (DINOv3)
+        # Load DINOv3
         if verbose:
-            print("loading image feature extractor", self.image_feature_extractor_name)
-        self.processor = AutoImageProcessor.from_pretrained(self.image_feature_extractor_name)
-        self.image_feature_extractor = AutoModel.from_pretrained(self.image_feature_extractor_name)
+            print("loading model", self.image_feature_extractor_name)
+        self.processor = processor
+        if self.processor is None:
+            self.processor = AutoProcessor.from_pretrained(self.image_feature_extractor_name)
+        self.image_feature_extractor = image_feature_extractor
+        if self.image_feature_extractor is None:
+            self.image_feature_extractor = AutoModel.from_pretrained(self.image_feature_extractor_name)
+        self.patch_size = self.image_feature_extractor.config.patch_size
+        self.image_dim = self.image_feature_extractor.config.hidden_size
         if self.freeze_image_encoder:
             # Important for DDP: frozen params must not require grad.
             for p in self.image_feature_extractor.parameters():
                 p.requires_grad = False
-
-        image_dim = self.image_feature_extractor.config.hidden_size
+            self.image_feature_extractor.eval()
         if verbose:
             print(self.image_feature_extractor)
-            print("Num register tokens:", self.image_feature_extractor.config.num_register_tokens)  # 4
-            print("Image hidden dim:", image_dim)
-
+            print("Patch size:", self.patch_size)  # 16
+            print("Image hidden dim:", self.image_dim)
         self.d_model = d_model
-        self.num_register_tokens = self.image_feature_extractor.config.num_register_tokens
 
         self.trajectory_transformer = TrajectoryTransformer(d_model=d_model,
-                                                            num_blocks=num_blocks)
+                                                            num_blocks=num_blocks,
+                                                            dropout=dropout)
 
-        self.image_proj = nn.Identity() if image_dim == d_model else nn.Linear(image_dim, d_model)
+        self.image_proj = nn.Identity() if self.image_dim == d_model else nn.Linear(self.image_dim, d_model)
 
         self.fusion = nn.ModuleList([
             FusionBlock(d_model=d_model, n_heads=n_heads, dropout=dropout)
             for _ in range(fusion_blocks)
         ])
 
+        # Reward Prediction Head
         self.reward_head = nn.Sequential(
             nn.LayerNorm(d_model),
             nn.Linear(d_model, d_model // 2),
@@ -294,51 +293,61 @@ class RewardModelPointBased(nn.Module):
             nn.Linear(d_model // 2, 1),
         )
 
-    def _extract_image_tokens(self, image_inputs, keep_cls=False) -> torch.Tensor:
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if self.freeze_image_encoder:
+            self.image_feature_extractor.eval()
+        return self
+
+    def forward(self, pts: torch.Tensor, image_inputs, B=None, M=None) -> torch.Tensor:
         """
-        Returns patch tokens with shape (B, N_img, D_model), excluding register tokens and cls token (if not keep_cls).
+        Args:
+            pts: (B, M, K, 2) tensor of point trajectories
+            B: batch
+            M: number of trajectories, 4?
+            K: number of points in each trajectory, 10
+            2: (x, y) of trajectory coordinates
+            image_inputs: dict-like input for DINOv3 (must include pixel_values)
+                (batch_size, 3, 224, 224)
+        Returns:
+            rewards: (B, M) tensor for 4D trajectory input, or (B*M,) tensor for already-flat 3D input
         """
+        return_flat = False
+        if len(pts.shape) == 4:
+            B, M, K, _ = pts.shape
+            pts_flat = pts.reshape(B * M, K, 2).float()
+        elif len(pts.shape) == 3: # assuming already flat, we need B and M from outside
+            if (B is None) or (M is None):
+                raise ValueError("batch size B and trajectory count M are required when pts is already flat")
+            pts_flat = pts.float()
+            return_flat = True
+        else:
+            raise ValueError(f"reward model pts shape {pts.shape} mismatch; expected (B,M,K,2) or (B*M,K,2)")
+        if pts_flat.shape[0] != B * M:
+            raise ValueError(
+                f"flat trajectory count {pts_flat.shape[0]} does not match B*M ({B}*{M}={B * M})"
+            )
+        x = self.trajectory_transformer(pts_flat)  # (B, K+1, D_model) with CLS at index 0]
+
         if self.freeze_image_encoder:
             with torch.no_grad():
                 img_output = self.image_feature_extractor(**image_inputs)
         else:
             img_output = self.image_feature_extractor(**image_inputs)
+        # original_patch_features = orig_output.last_hidden_state[:, 0, :] # same as: img_output.pooler_output
 
-        img_tokens = img_output.last_hidden_state
-        img_tokens = img_tokens[:, 1 + self.num_register_tokens:, :]
+        img_tokens = img_output.last_hidden_state # [batch, 196, 1408]
+        # img_tokens = img_tokens[:, 1 + self.num_register_tokens :, :] # [batch, 196, 768]
 
-        if keep_cls:
-            cls_token = img_output.last_hidden_state[:, :1, :]
-            img_tokens = torch.cat([cls_token, img_tokens], dim=1)
-        return self.image_proj(img_tokens)
+        image_batch_size, n_patches, embed = img_tokens.shape
+        if image_batch_size != B:
+            raise ValueError(
+                f"image batch size {image_batch_size} does not match trajectory batch size {B}"
+            )
+        assert (embed == self.d_model) , f"embedding size {embed} does not match d_model {self.d_model}"
 
-    def forward(self, pts: torch.Tensor, image_inputs) -> torch.Tensor:
-        """
-        Args:
-            pts: (B, M, K, 2) tensor of point trajectories
-            image_inputs: dict-like input for DINOv3 (must include pixel_values)
-            padding_mask: (B, K) boolean tensor where True indicates padding points to ignore
-
-        Returns:
-            rewards: (B,) tensor of scalar rewards for each trajectory
-        """
-
-        B, M, K, _ = pts.shape
-        pts_flat = pts.reshape(B * M, K, 2)
-        x = self.trajectory_transformer(pts_flat)  # (B, K+1, D_model) with CLS at index 0
-
-        img_tokens = self._extract_image_tokens(image_inputs, keep_cls=self.keep_cls_token)  # (B, N_img, D_model)
-        B, N_img, _ = img_tokens.shape
-
-        img_tokens_exp = img_tokens[:, None, :, :].expand(B, M, N_img, self.d_model)
-        img_tokens_flat = img_tokens_exp.reshape(B * M, N_img, self.d_model)
-
-        # Extend mask for prepended CLS token (never masked).
-        B = x.shape[0]
-
-        # if padding_mask is not None:
-        #     cls_mask = torch.zeros((B, 1), dtype=torch.bool, device=x.device)
-        #     x_padding_mask = torch.cat([cls_mask, padding_mask.bool()], dim=1)
+        img_tokens_exp  = img_tokens[:, None, :, :].expand(image_batch_size, M, n_patches, embed)
+        img_tokens_flat = img_tokens_exp.reshape(image_batch_size * M, n_patches, embed)
 
         # Trajectory queries attend to image patch keys/values.
         for block in self.fusion:
@@ -347,7 +356,9 @@ class RewardModelPointBased(nn.Module):
         # CLS readout for reward prediction.
         cls_feat = x[:, 0, :]
         rewards = self.reward_head(cls_feat).squeeze(-1)
-        return rewards
+        if return_flat:
+            return rewards # [batch * M (number of trajectories)]
+        return rewards.reshape(B, M)
 
 
 def build_image_inputs(
@@ -427,20 +438,19 @@ class RewardInferenceRunner:
             verbose=verbose
         )
 
-    def load_model(self, checkpoint_path: str,  config_path: str, verbose: bool = False) -> RewardModelPointBased:
+    def load_model(self, checkpoint_path: str,  config_path: str, verbose: bool = False):
         config = load_config(config_path)
         device = select_device()
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
         state_dict = checkpoint["model_state_dict"] if "model_state_dict" in checkpoint else checkpoint
 
-        model = RewardModelPointBased(
+        model = TrajectoryRewardModel(
             d_model=config["d_model"],
             n_heads=config["num_heads"],
             dropout=config["dropout"],
             verbose=verbose,
             fusion_blocks=config["fusion_blocks"],
             num_blocks=config["num_blocks"],
-            traj_per_image=4
         )
         model.to(device)
         model.load_state_dict(state_dict, strict=False)

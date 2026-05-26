@@ -136,7 +136,7 @@ def main(config: dict) -> None:
         # rm_ckpt_path = "/home/jim/Projects/prune/weights/model_151_epoch_22.pth"
         # rm_ckpt_path = "/home/jim/Projects/prune/weights/model_163_epoch_32.pth"
         rm_ckpt_path = "/home/jim/Projects/prune/weights/model_165_epoch_34.pth"  # looks ok?
-        # rm_ckpt_path = "/home/jim/Projects/prune/weights/model_169_epoch_8.pth"
+        rm_ckpt_path = "/home/jim/Projects/prune/weights/model_173_epoch_10.pth" # jepa
         # rm_config_path = "/home/jim/Projects/prune/config/config_point_based.yaml"
         rm_config_path = "/home/jim/Projects/prune/config/setting.yaml"
         reward_runner = RewardInferenceRunner(checkpoint_path=rm_ckpt_path, config_path=rm_config_path, verbose=True)
@@ -308,7 +308,7 @@ def main(config: dict) -> None:
                 pruned_actions = prune_distance(actions, distance_cutoff, 8)
                 image_tensor = torch.from_numpy(np.array(context_queue[-1])).permute(2, 0, 1).contiguous()  # (3, H, W)
                 points_tensor = torch.from_numpy(pruned_actions)  # (M, K, 2)
-                rewards = reward_runner.predict_rewards(image_tensor=image_tensor, points_tensor=points_tensor)
+                rewards = reward_runner.predict_rewards(image_tensor=image_tensor, points_tensor=points_tensor)[0]
                 best_action = torch.argmax(rewards).item()
                 print("Predicted rewards:", rewards, "best reward action(red) :", best_action)
                 # different distrance metric to make sure selected action does not veer too far:
@@ -422,7 +422,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dir",
         "-topo_dir",
-        default="mrc_vint_ft3",
+        default="corridoor_vint_ft5",
         type=str,
         help="path to topomap images",
     )

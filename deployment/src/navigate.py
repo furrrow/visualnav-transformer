@@ -125,6 +125,7 @@ class NavigationNode(Node):
         # rm_ckpt_path = f"{parent_dir}/prune/weights/epoch_029.pt"
         rm_ckpt_path = f"{parent_dir}/prune/weights/model_150_epoch_34.pth"
         # rm_ckpt_path = f"{parent_dir}/prune/weights/model_151_epoch_22.pth"
+        # rm_ckpt_path = f"{parent_dir}/prune/weights/model_173_epoch_10.pth"  # jepa
         # rm_config_path = f"{parent_dir}/prune/config/config_point_based.yaml"
         rm_config_path = f"{parent_dir}/prune/config/setting.yaml"
         if args.steer:
