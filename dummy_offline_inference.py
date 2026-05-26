@@ -38,6 +38,91 @@ CAMERA_MATRIX_DIR = "/home/jim/Projects/prune/deployment/camera_matrix.json"
 ROBOT_CONFIG_PATH ="./deployment/config/robot.yaml"
 MODEL_CONFIG_PATH = "./deployment/config/models.yaml"
 
+dummy_actions = np.array(
+[[[ 6.11471534e-01,  2.28075981e-02],
+  [ 1.23913908e+00, -1.16825104e-04],
+  [ 1.88055801e+00,  1.61237717e-02],
+  [ 2.54769731e+00,  1.59904957e-02],
+  [ 3.22852659e+00,  4.91845608e-02],
+  [ 3.91691875e+00,  8.81326199e-02],
+  [ 4.63910770e+00,  1.69375181e-01],
+  [ 5.36809731e+00,  2.63122320e-01]],
+ [[ 6.08049929e-01, -9.69552994e-03],
+  [ 1.22131133e+00,  2.52723694e-05],
+  [ 1.84367132e+00,  4.32252884e-03],
+  [ 2.46937156e+00,  2.21924782e-02],
+  [ 3.10458779e+00,  6.04500771e-02],
+  [ 3.73051548e+00,  9.94310379e-02],
+  [ 4.37741470e+00,  1.61967278e-01],
+  [ 5.02405787e+00,  2.70364285e-01]],
+ [[ 6.27055168e-01,  1.87706947e-02],
+  [ 1.27188396e+00,  4.26325798e-02],
+  [ 1.94885838e+00,  5.13057709e-02],
+  [ 2.62499022e+00,  1.08020306e-01],
+  [ 3.28061485e+00,  1.75201416e-01],
+  [ 3.88464141e+00,  2.45447159e-01],
+  [ 4.46694565e+00,  3.64558697e-01],
+  [ 5.04016972e+00,  4.53863144e-01]],
+ [[ 7.48751044e-01,  2.71315575e-02],
+  [ 1.46656895e+00,  2.18515396e-02],
+  [ 2.17804003e+00,  2.13041306e-02],
+  [ 2.84093666e+00,  1.53980255e-02],
+  [ 3.48469210e+00, -3.32434177e-02],
+  [ 4.10397577e+00, -6.42757416e-02],
+  [ 4.72613287e+00, -7.59413242e-02],
+  [ 5.34765816e+00, -6.77120686e-02]],
+ [[ 7.04163313e-01,  8.03565979e-03],
+  [ 1.37333655e+00,  1.64804459e-02],
+  [ 2.02007008e+00,  1.47776604e-02],
+  [ 2.65990758e+00,  3.05585861e-02],
+  [ 3.32704902e+00,  7.10954666e-02],
+  [ 4.02168560e+00,  1.30295277e-01],
+  [ 4.74540377e+00,  2.28003979e-01],
+  [ 5.47259521e+00,  3.42406750e-01]],
+ [[ 4.75286603e-01,  5.64765930e-03],
+  [ 9.55439866e-01,  7.57312775e-03],
+  [ 1.45891404e+00,  2.10742950e-02],
+  [ 1.93941021e+00,  8.06713104e-02],
+  [ 2.42008090e+00,  2.09338665e-01],
+  [ 2.92968440e+00,  3.98213863e-01],
+  [ 3.48213840e+00,  6.73923492e-01],
+  [ 4.01696014e+00,  9.91996288e-01]],
+ [[ 6.49355054e-01,  8.19349289e-03],
+  [ 1.29916918e+00, -2.03967094e-03],
+  [ 1.97712350e+00, -1.64127350e-02],
+  [ 2.67512894e+00, -9.10854340e-03],
+  [ 3.38129783e+00,  1.20463371e-02],
+  [ 4.08308458e+00,  4.63843346e-02],
+  [ 4.78140974e+00,  1.31647110e-01],
+  [ 5.46730661e+00,  2.31839657e-01]],
+ [[ 7.77929425e-01, -1.30581856e-03],
+  [ 1.57163489e+00, -1.95932388e-03],
+  [ 2.38158727e+00, -2.35500336e-02],
+  [ 3.19476151e+00, -5.76543808e-03],
+  [ 4.01301718e+00,  1.13821030e-02],
+  [ 4.79053736e+00,  8.51106644e-02],
+  [ 5.53158665e+00,  1.99385643e-01],
+  [ 6.23126841e+00,  3.66864204e-01]]])
+
+def generate_trajectory(curvature=0.0, num_points=8, step=1.0):
+    """
+    curvature:
+        >0 : curve left
+        <0 : curve right
+         0 : straight
+    """
+    traj = []
+
+    for i in range(num_points):
+        x = i * step + 0.5
+
+        # quadratic lateral offset
+        y = curvature * (i ** 2)
+
+        traj.append([round(x, 3), round(y, 3)])
+
+    return traj
+
 
 def make_video_writer(video_path: str, fps: float):
     suffix = Path(video_path).suffix.lower()
@@ -132,16 +217,13 @@ def main(config: dict) -> None:
     if args.steer:
         # Reward model
         # rm_ckpt_path = "./weights/epoch_029.pt"
-        # rm_ckpt_path = "/home/jim/Projects/prune/weights/model_150_epoch_34.pth"
-        # rm_ckpt_path = "/home/jim/Projects/prune/weights/model_151_epoch_22.pth"
-        # rm_ckpt_path = "/home/jim/Projects/prune/weights/model_163_epoch_32.pth"
-        rm_ckpt_path = "/home/jim/Projects/prune/weights/model_165_epoch_34.pth"  # looks ok?
-        # rm_ckpt_path = "/home/jim/Projects/prune/weights/model_169_epoch_8.pth"
+        # rm_ckpt_path = "../../weights/model_150_epoch_34.pth"
+        rm_ckpt_path = "../../weights/model_151_epoch_22.pth"
         # rm_config_path = "/home/jim/Projects/prune/config/config_point_based.yaml"
         rm_config_path = "/home/jim/Projects/prune/config/setting.yaml"
         reward_runner = RewardInferenceRunner(checkpoint_path=rm_ckpt_path, config_path=rm_config_path, verbose=True)
 
-    distance_cutoff = 3.0 # won't consider paths beyond this distance when doing steering
+    distance_cutoff = 2.5 # won't consider paths beyond this distance when doing steering
     ckpt_path = model_paths[args.model]["ckpt_path"]
     if os.path.exists(ckpt_path):
         print(f"Loading model from {ckpt_path}")
@@ -174,15 +256,6 @@ def main(config: dict) -> None:
         mode = "navigate"
     else:
         mode = "explore"
-
-    # load model weights
-    model = load_model(
-        ckpt_path,
-        model_params,
-        device,
-    )
-    model = model.to(device)
-    model.eval()
     # load topomap
     topomap_filenames = sorted(os.listdir(os.path.join(
         TOPOMAP_IMAGES_DIR, args.dir)), key=lambda x: int(x.split(".")[0]))
@@ -195,20 +268,6 @@ def main(config: dict) -> None:
 
     cam_matrix, dist_coeffs, T_base_from_cam = load_calibration(CAMERA_MATRIX_DIR)
     T_cam_from_base = np.linalg.inv(T_base_from_cam)
-
-    if model_params["model_type"] == "nomad":
-        num_diffusion_iters = model_params["num_diffusion_iters"]
-        noise_scheduler = DDPMScheduler(
-            num_train_timesteps=model_params["num_diffusion_iters"],
-            beta_schedule='squaredcos_cap_v2',
-            clip_sample=True,
-            prediction_type='epsilon'
-        )
-
-
-    # Definition of the goal mask (convention: 0 = no mask, 1 = mask)
-    one_mask = torch.ones(1).long().to(device)
-    no_mask = torch.zeros(1).long().to(device)
 
     assert -1 <= args.goal_node < len(topomap), "Invalid goal index"
     if args.goal_node == -1:
@@ -223,103 +282,50 @@ def main(config: dict) -> None:
             f"start_img={args.start_img} does not leave enough images for "
             f"context_size={context_size}; last valid start is {last_start_img}"
         )
-
     closest_node = args.start_img
     plt.ion()
     fig = plt.figure(figsize=(16, 8))
     video_writer.setup(fig, video_path, dpi=args.video_dpi)
     for nav_idx, start_img in enumerate(range(args.start_img, last_start_img + 1)):
         context_queue = topomap[start_img:context_size + start_img + 1]
+        # context_queue = topomap[0:context_size + 0 + 1]
         rewards = None
         chosen_waypoint = np.zeros(4)
-        print(f"\nNavigation iteration {nav_idx}: topomap {args.dir} window {start_img}-{start_img + context_size}")
+        actions = np.array([
+            generate_trajectory(-0.02),
+            generate_trajectory(-0.03),
+            generate_trajectory(-0.04),
+            generate_trajectory(-0.05),
+            generate_trajectory(0.0),
+            generate_trajectory(0.02),
+            generate_trajectory(0.03),
+            generate_trajectory(0.04),
+            generate_trajectory(0.05),
+            # generate_trajectory(0.10),
+            # generate_trajectory(0.15),
 
-        obs_images = transform_images(context_queue, model_params["image_size"], center_crop=False)
-        obs_images = torch.split(obs_images, 3, dim=1)
-        obs_images = torch.cat(obs_images, dim=1)
-        obs_images = obs_images.to(device)  # [1, 15, 96, 96]
+            # generate_trajectory(-0.10),
+            # generate_trajectory(-0.15),
+        ])
+        actions = dummy_actions
+        current_action = actions[0]
+        chosen_waypoint = current_action[args.waypoint]
+        obs_image = np.array(context_queue[-1])  # not sure which img is the best one to show...
 
-        start = max(closest_node - args.radius, 0)
-        end = min(closest_node + args.radius + 1, goal_node)
-        goal_image = [transform_images(g_img, model_params["image_size"], center_crop=False).to(device) for g_img in
-                      topomap[start:end + 1]]
-        goal_image = torch.concat(goal_image, dim=0)
-
-        if mode == "explore":
-            obs_cond = model('vision_encoder', obs_img=obs_images.repeat(len(goal_image), 1, 1, 1),
-                             goal_img=goal_image, input_goal_mask=one_mask.repeat(len(goal_image)))
-            dists = model("dist_pred_net", obsgoal_cond=obs_cond)
-        elif mode == "navigate":
-            obs_cond = model('vision_encoder', obs_img=obs_images.repeat(len(goal_image), 1, 1, 1),
-                                      goal_img=goal_image, input_goal_mask=no_mask.repeat(len(goal_image)))
-            dists = model("dist_pred_net", obsgoal_cond=obs_cond)
-
-        dists = to_numpy(dists.flatten())
-        min_idx = np.argmin(dists)
-        closest_node = min_idx + closest_node
-
-        # infer action
-        with torch.no_grad():
-            if mode == "explore":
-                obs_cond = obs_cond[
-                    min(min_idx + int(dists[min_idx] < args.close_threshold), len(obs_cond) - 1)].unsqueeze(0)
-            elif mode == "navigate":
-                obs_cond = obs_cond[
-                    min(min_idx + int(dists[min_idx] < args.close_threshold), len(obs_cond) - 1)].unsqueeze(0)
-
-            if len(obs_cond.shape) == 2:
-                obs_cond = obs_cond.repeat(args.num_samples, 1)
-            else:
-                obs_cond = obs_cond.repeat(args.num_samples, 1, 1)
-
-            noisy_action = torch.randn(
-                (args.num_samples, model_params["len_traj_pred"], 2), device=device)
-            naction = noisy_action
-
-            # init scheduler
-            noise_scheduler.set_timesteps(num_diffusion_iters)
-            start_time = time.time()
-            for k in noise_scheduler.timesteps[:]:
-                # predict noise
-                noise_pred = model(
-                    'noise_pred_net',
-                    sample=naction,
-                    timestep=k,
-                    global_cond=obs_cond
-                )
-                # inverse diffusion step (remove noise)
-                naction = noise_scheduler.step(
-                    model_output=noise_pred,
-                    timestep=k,
-                    sample=naction
-                ).prev_sample
-            print("noise scheduler time:", time.time() - start_time)
-
-            # proc_time = time.time() - start_time
-            # mean_proc_time = proc_time / noisy_action.shape[0]
-            # print("Mean Processing Time UC", mean_proc_time)
-            # print("Processing Time UC", proc_time)
-
-            actions = to_numpy(get_action(naction))
-            current_action = actions[0]
-            chosen_waypoint = current_action[args.waypoint]
-
-            if args.steer:
-                pruned_actions = prune_distance(actions, distance_cutoff, 8)
-                image_tensor = torch.from_numpy(np.array(context_queue[-1])).permute(2, 0, 1).contiguous()  # (3, H, W)
-                points_tensor = torch.from_numpy(pruned_actions)  # (M, K, 2)
-                rewards = reward_runner.predict_rewards(image_tensor=image_tensor, points_tensor=points_tensor)
-                best_action = torch.argmax(rewards).item()
-                print("Predicted rewards:", rewards, "best reward action(red) :", best_action)
-                # different distrance metric to make sure selected action does not veer too far:
-                eval_dict = {}
-                for idx, action in enumerate(pruned_actions):
-                    eval_dict[idx] = {}
-                    eval_dict[idx]["reward"] = rewards[idx].item()
-                    eval_dict[idx]["frdist"] = frdist(action, pruned_actions[0])
-            proc_time = time.time() - start_time
-            mean_proc_time = proc_time / noisy_action.shape[0]
-            print(f"Processing Time {proc_time:.4f} Mean Processing Time {mean_proc_time:.4f}")
+        if args.steer:
+            pruned_actions = prune_distance(actions, distance_cutoff, 8)
+            # pruned_actions = actions
+            image_tensor = torch.from_numpy(obs_image).permute(2, 0, 1).contiguous()  # (3, H, W)
+            points_tensor = torch.from_numpy(pruned_actions)  # (M, K, 2)
+            rewards = reward_runner.predict_rewards(image_tensor=image_tensor, points_tensor=points_tensor)
+            best_action = torch.argmax(rewards).item()
+            # print("Predicted rewards:", rewards, "best reward action(red) :", best_action)
+            # different distrance metric to make sure selected action does not veer too far:
+            eval_dict = {}
+            for idx, action in enumerate(pruned_actions):
+                eval_dict[idx] = {}
+                eval_dict[idx]["reward"] = rewards[idx].item()
+                eval_dict[idx]["frdist"] = frdist(action, pruned_actions[0])
 
         # plot distribution:
         fig.clf()
@@ -335,7 +341,7 @@ def main(config: dict) -> None:
         traj_list[:, :, 0] = -traj_list[:, :, 0] # flip x about 0 for visualization purposes
         traj_colors = ["blue"] + ["green"] * (len(actions)-1)
         traj_alphas = [0.75] + [0.1] * (len(actions)-1)
-        # print("first action:", np.array2string(actions[0], precision=1, suppress_small=True))
+        print("first action:", np.array2string(actions[0][0], precision=1, suppress_small=True))
         if rewards is not None:
             new_traj_list = np.concatenate([pruned_actions], axis=0, )
             new_traj_list = new_traj_list[:, :, ::-1]  # flip y-x for visualization purposes
@@ -362,7 +368,6 @@ def main(config: dict) -> None:
             traj_alphas=traj_alphas,
             point_alphas=point_alphas,
         )
-        obs_image = np.array(context_queue[-1])  # not sure which img is the best one to show...
         display_goal_image = np.array(topomap[closest_node])
         if args.steer:
             overlay_img = overlay_path(np.array(pruned_actions), obs_image, cam_matrix, T_cam_from_base, color_dict['GREEN'],
