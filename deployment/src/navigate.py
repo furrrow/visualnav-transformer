@@ -123,9 +123,11 @@ class NavigationNode(Node):
 
         # reward model
         # rm_ckpt_path = f"{parent_dir}/prune/weights/epoch_029.pt"
-        rm_ckpt_path = f"{parent_dir}/prune/weights/model_150_epoch_34.pth"
+        # rm_ckpt_path = f"{parent_dir}/prune/weights/model_150_epoch_34.pth"
         # rm_ckpt_path = f"{parent_dir}/prune/weights/model_151_epoch_22.pth"
         # rm_ckpt_path = f"{parent_dir}/prune/weights/model_173_epoch_10.pth"  # jepa
+        rm_ckpt_path = f"{parent_dir}/prune/weights/model_180_epoch_14.pth"  # jepa
+        rm_ckpt_path = f"{parent_dir}/prune/weights/model_187_epoch_24.pth"  # jepa
         # rm_config_path = f"{parent_dir}/prune/config/config_point_based.yaml"
         rm_config_path = f"{parent_dir}/prune/config/setting.yaml"
         if args.steer:
@@ -327,7 +329,7 @@ class NavigationNode(Node):
                     pruned_actions = actions
                     image_tensor = torch.from_numpy(current_img).permute(2, 0, 1).contiguous()  # (3, H, W)
                     points_tensor = torch.from_numpy(naction)  # (M, K, 2)
-                    rewards = self.reward_runner.predict_rewards(image_tensor=image_tensor, points_tensor=points_tensor)
+                    rewards = self.reward_runner.predict_rewards(image_tensor=image_tensor, points_tensor=points_tensor)[0]
                     eval_dict = {}
                     for idx, action in enumerate(pruned_actions):
                         eval_dict[idx] = {}
@@ -352,7 +354,7 @@ class NavigationNode(Node):
                     out_msg = self.br.cv2_to_imgmsg(np.array(current_img), encoding="rgb8")
                 self.trajectory_visual_pub.publish(out_msg)
                 naction = naction[0]
-                print("first action:", np.array2string(naction, precision=1, suppress_small=True))
+                # print("first action:", np.array2string(naction, precision=1, suppress_small=True))
                 chosen_waypoint = naction[args.waypoint]
             else:
                 start = max(self.closest_node - args.radius, 0)
