@@ -123,8 +123,10 @@ class NavigationNode(Node):
 
         # reward model
         # rm_ckpt_path = f"{parent_dir}/prune/weights/epoch_029.pt"
-        rm_ckpt_path = f"{parent_dir}/prune/weights/model_150_epoch_34.pth"
+        # rm_ckpt_path = f"{parent_dir}/prune/weights/model_150_epoch_34.pth"
         # rm_ckpt_path = f"{parent_dir}/prune/weights/model_151_epoch_22.pth"
+        rm_ckpt_path = f"{parent_dir}/prune/weights/model_163_epoch_32.pth"
+        # rm_ckpt_path = f"{parent_dir}/prune/weights/model_165_epoch_34.pth"
         # rm_config_path = f"{parent_dir}/prune/config/config_point_based.yaml"
         rm_config_path = f"{parent_dir}/prune/config/setting.yaml"
         if args.steer:
@@ -351,7 +353,7 @@ class NavigationNode(Node):
                     out_msg = self.br.cv2_to_imgmsg(np.array(current_img), encoding="rgb8")
                 self.trajectory_visual_pub.publish(out_msg)
                 naction = naction[0]
-                print("first action:", np.array2string(naction, precision=1, suppress_small=True))
+                # print("first action:", np.array2string(naction, precision=1, suppress_small=True))
                 chosen_waypoint = naction[args.waypoint]
             else:
                 start = max(self.closest_node - args.radius, 0)

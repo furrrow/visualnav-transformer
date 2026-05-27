@@ -19,7 +19,7 @@ tmux select-pane -t 0
 # tmux send-keys "export PYTHONPATH=/workspace/prune/policies/flownav" Enter
 # tmux send-keys "source /workspace/prune/setup.bash" Enter
 # tmux send-keys "source /opt/ros/humble/setup.bash" Enter
-tmux send-keys "uv run deployment/src/navigate.py --dir antonov"
+tmux send-keys "uv run deployment/src/navigate.py --dir kitchen_5fl"
 
 
 # Run the pd_controller.py script in the fourth pane
