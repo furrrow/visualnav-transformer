@@ -1,0 +1,20 @@
+[project]
+name = "visualnav-transformer"
+version = "0.1.0"
+description = "visualnav-transformer repos"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "torch",
+    "torchvision",
+    "numpy",
+    "matplotlib",
+    "pyyaml",
+    "efficientnet_pytorch",
+    "warmup_scheduler",
+    "diffusers",
+]
+
+# original requrements are at:
+# deployment/deployment_environment.yaml
+# train/train_environment.yml
